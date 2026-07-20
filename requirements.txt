@@ -1,0 +1,11 @@
+alpaca-py>=0.21
+pandas>=2.0
+python-dotenv>=1.0
+truststore>=0.9
+
+# Dashboard only (python -m streamlit run dashboard.py)
+streamlit>=1.50
+plotly>=6.0
+
+# Backtesting only (python -m bot.backtest)
+matplotlib>=3.8

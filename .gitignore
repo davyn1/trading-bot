@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Runtime state and outputs
+state.json
+*.csv
+*.log
+backtest_results.png
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

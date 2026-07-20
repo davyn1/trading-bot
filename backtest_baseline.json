@@ -1,0 +1,79 @@
+{
+  "mean_reversion": {
+    "win_rate": 0.4139,
+    "avg_trade_pnl_pct": -0.1646,
+    "sharpe": -3.113,
+    "trades": 273,
+    "instruments": [
+      "SPY",
+      "QQQ"
+    ]
+  },
+  "momentum_breakout": {
+    "win_rate": 0.2174,
+    "avg_trade_pnl_pct": -0.2822,
+    "sharpe": -3.304,
+    "trades": 46,
+    "instruments": [
+      "BTC/USD"
+    ]
+  },
+  "trend_following": {
+    "win_rate": 0.4,
+    "avg_trade_pnl_pct": -0.2617,
+    "sharpe": -0.709,
+    "trades": 5,
+    "instruments": [
+      "GLD",
+      "USO"
+    ]
+  },
+  "_meta": {
+    "generated_at": "2026-07-20T06:10:57.056904+00:00",
+    "months": 6,
+    "window_start": "2026-01-18T14:47:44.946679+00:00",
+    "note": "Per-strategy stats pooled from independent single-instrument backtests (bot/backtest.py Engine, 0.05% slippage per fill, $0 commission). avg_trade_pnl_pct = mean trade P&L as % of a $100k starting account. sharpe is trade-count-weighted average of each instrument's daily-curve Sharpe.",
+    "per_instrument": {
+      "BTC/USD": {
+        "trades": 46,
+        "win_rate": 0.2174,
+        "sharpe": -3.304,
+        "total_return": -0.1298,
+        "max_dd": -0.1436,
+        "strategy": "momentum_breakout"
+      },
+      "GLD": {
+        "trades": 3,
+        "win_rate": 0.3333,
+        "sharpe": -1.213,
+        "total_return": -0.0132,
+        "max_dd": -0.0195,
+        "strategy": "trend_following"
+      },
+      "SPY": {
+        "trades": 175,
+        "win_rate": 0.4229,
+        "sharpe": -3.635,
+        "total_return": -0.2966,
+        "max_dd": -0.312,
+        "strategy": "mean_reversion"
+      },
+      "QQQ": {
+        "trades": 98,
+        "win_rate": 0.398,
+        "sharpe": -2.18,
+        "total_return": -0.1527,
+        "max_dd": -0.1869,
+        "strategy": "mean_reversion"
+      },
+      "USO": {
+        "trades": 2,
+        "win_rate": 0.5,
+        "sharpe": 0.047,
+        "total_return": 0.0001,
+        "max_dd": -0.0233,
+        "strategy": "trend_following"
+      }
+    }
+  }
+}
