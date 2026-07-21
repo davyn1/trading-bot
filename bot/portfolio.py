@@ -115,8 +115,10 @@ class Broker:
         now = datetime.now(timezone.utc)
         # Span estimate: crypto trades ~24/7; equities ~6.5h/day plus
         # weekends/holidays, so overshoot generously and trim with tail().
+        # The flat 3-day pad covers a weekend (+ holiday) right before "now" —
+        # a 1-day pad left SPY short of warmup on a Monday morning.
         factor = 1.5 if is_crypto(symbol) else 6.5
-        start = now - timedelta(minutes=int(timeframe_minutes * bars_needed * factor) + 1440)
+        start = now - timedelta(minutes=int(timeframe_minutes * bars_needed * factor) + 4320)
         tf = to_timeframe(timeframe_minutes)
 
         if is_crypto(symbol):

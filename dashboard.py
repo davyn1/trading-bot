@@ -44,6 +44,7 @@ SERIES = {  # fixed categorical order: strategy -> (light, dark)
     "mean_reversion": ("#2a78d6", "#3987e5"),
     "momentum_breakout": ("#008300", "#008300"),
     "trend_following": ("#e87ba4", "#d55181"),
+    "stock_momentum": ("#eda100", "#c98500"),
 }
 # Status palette (icon + label always travel together — never color alone)
 STATUS = {
@@ -57,7 +58,7 @@ STATUS = {
 CANDLE_UP, CANDLE_DOWN = "#0ca30c", "#d03b3b"
 
 STRAT_LABEL = {"mean_reversion": "Mean Reversion", "momentum_breakout": "Momentum Breakout",
-               "trend_following": "Trend Following"}
+               "trend_following": "Trend Following", "stock_momentum": "Stock Momentum"}
 
 
 def tf_label(minutes: int) -> str:
@@ -157,7 +158,7 @@ def snapshot(symbol: str, position) -> dict:
         else:
             out["status"] = "scanning"
 
-    elif strat.name == "momentum_breakout":
+    elif strat.name in ("momentum_breakout", "stock_momentum"):
         hh = df["high"].rolling(p["channel_period"]).max().shift(1)
         ll = df["low"].rolling(p["channel_period"]).min().shift(1)
         vavg = df["volume"].rolling(p["volume_avg_period"]).mean().shift(1)
@@ -168,8 +169,16 @@ def snapshot(symbol: str, position) -> dict:
         out["short_mask"] = pd.Series(False, index=df.index)
         out["lines"] = [f"{gap_pct:.2f}% below 20-bar high" if gap_pct > 0
                         else f"{-gap_pct:.2f}% ABOVE 20-bar high",
-                        f"volume {vol_ratio:.2f}x avg (needs {p['volume_mult']}x)",
-                        "long/flat only (spot crypto)"]
+                        f"volume {vol_ratio:.2f}x avg (needs {p['volume_mult']}x)"]
+        if strat.name == "stock_momentum":
+            from bot.strategies.base import ema as _ema
+            trend = float(_ema(df["close"], p["trend_ema"]).iloc[-1])
+            out["overlays"][f"EMA{p['trend_ema']}"] = _ema(df["close"], p["trend_ema"])
+            out["lines"].append(
+                f"trend filter: {'clear' if close > trend else '🚫 below EMA'}"
+                f" (EMA{p['trend_ema']} {trend:,.2f})")
+        else:
+            out["lines"].append("long/flat only (spot crypto)")
         if bool(out["long_mask"].iloc[-1]):
             out["status"] = "signal"
         elif gap_pct <= 1.5:

@@ -92,6 +92,38 @@ STRATEGIES = {
             "atr_period": 14,
         },
     },
+    # Donchian breakout adapted for single stocks (long/flat). Same core as
+    # momentum_breakout plus stock-specific entry guards: trend filter,
+    # post-gap cooldown, and an earnings blackout ("earnings_dates" is a
+    # manually maintained per-instrument list of ISO dates in INSTRUMENTS).
+    # Defaults set 2026-07-20 from a 5-symbol/2-timeframe/3-filter sweep:
+    # 4H candles beat 1H decisively (avg Sharpe 0.49 vs 0.11); the gap filter
+    # subtracted performance (stocks gap benignly every open) so it defaults
+    # off; the trend filter was inert in-window and stays on as cheap
+    # insurance. Small samples (2-9 trades/symbol) — treat as provisional.
+    "stock_momentum": {
+        "timeframe_minutes": 240,
+        "risk_pct": 0.01,
+        # 3x (was 2x) per 2026-07-20 stop-width sweep: avg Sharpe 0.63 vs
+        # 0.46 across 6 names; single stocks need room to wiggle — the
+        # trailing stop is effectively this strategy's only exit in practice.
+        "stop_atr_mult": 3.0,
+        "trailing": True,
+        "params": {
+            "channel_period": 20,
+            "volume_avg_period": 20,
+            "volume_mult": 1.5,
+            "atr_period": 14,
+            "use_trend_filter": True,
+            "trend_ema": 50,
+            "use_gap_filter": False,
+            "gap_atr_mult": 2.0,
+            "gap_cooldown_bars": 3,
+            "earnings_dates": [],       # e.g. ["2026-07-29"] — set per instrument
+            "earnings_days_before": 3,
+            "earnings_days_after": 1,
+        },
+    },
 }
 
 # --- Instrument -> strategy mapping -----------------------------------------
@@ -106,6 +138,21 @@ INSTRUMENTS = {
     "BTC/USD": {"strategy": "momentum_breakout"},
     "GLD": {"strategy": "trend_following"},
     "USO": {"strategy": "trend_following"},
+    # Single stocks on stock_momentum (added 2026-07-20). earnings_dates are
+    # MANUALLY maintained — update each quarter (no free earnings API). The
+    # blackout blocks entries 3 days before through 1 day after each date.
+    "AMD": {"strategy": "stock_momentum",
+            "params": {"earnings_dates": ["2026-08-04"]}},
+    "NVDA": {"strategy": "stock_momentum",
+             "params": {"earnings_dates": ["2026-08-26"]}},
+    "GOOGL": {"strategy": "stock_momentum",
+              "params": {"earnings_dates": ["2026-07-22"]}},
+    "TSLA": {"strategy": "stock_momentum",
+             "params": {"earnings_dates": ["2026-07-22"]}},
+    "WDC": {"strategy": "stock_momentum",
+            "params": {"earnings_dates": ["2026-08-05"]}},
+    "DOCN": {"strategy": "stock_momentum",
+             "params": {"earnings_dates": ["2026-08-12"]}},
 }
 
 # --- Correlation filter -----------------------------------------------------

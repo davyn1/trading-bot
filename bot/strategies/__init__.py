@@ -6,12 +6,14 @@ import config
 from .base import Signal, Strategy
 from .mean_reversion import MeanReversion
 from .momentum_breakout import MomentumBreakout
+from .stock_momentum import StockMomentum
 from .trend_following import TrendFollowing
 
 REGISTRY = {
     MeanReversion.name: MeanReversion,
     MomentumBreakout.name: MomentumBreakout,
     TrendFollowing.name: TrendFollowing,
+    StockMomentum.name: StockMomentum,
 }
 
 
