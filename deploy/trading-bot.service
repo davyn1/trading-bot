@@ -1,0 +1,23 @@
+[Unit]
+# systemd service that keeps the trading bot running 24/7. Copy this to
+# /etc/systemd/system/trading-bot.service on the server (see DEPLOY.md).
+Description=Alpaca paper-trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/home/trader/trading-bot
+# The bot writes state.json/trades.csv/bot.log into WorkingDirectory.
+ExecStart=/home/trader/trading-bot/.venv/bin/python -m bot.main
+# Auto-restart on any exit (crash, OOM, unexpected stop). An explicit
+# `systemctl stop` is still honored — systemd won't restart after that.
+# On restart the bot reconciles with Alpaca and resumes managing positions,
+# so a 3am crash self-heals with no orphaned stops. State is written
+# atomically after every change, so even a hard SIGTERM loses nothing.
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

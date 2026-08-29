@@ -1,0 +1,20 @@
+[Unit]
+# OPTIONAL: runs the Streamlit dashboard on the server, bound to localhost
+# only. View it securely from your laptop with an SSH tunnel (see DEPLOY.md);
+# it is never exposed to the public internet. Only enable this after the bot
+# itself is running well.
+Description=Trading bot dashboard (Streamlit, localhost only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/home/trader/trading-bot
+ExecStart=/home/trader/trading-bot/.venv/bin/python -m streamlit run dashboard.py \
+    --server.address 127.0.0.1 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
