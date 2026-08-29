@@ -12,17 +12,44 @@ unattended.
 
 ---
 
-## Part 1 — Create the server **[you]**
+## Part 1 — Create the server on DigitalOcean **[you]**
 
-1. Sign up at a VPS provider. **DigitalOcean** is the most beginner-friendly
-   (clean UI, good docs); Hetzner is cheaper; AWS Lightsail if you prefer AWS.
-2. Create a VM (DigitalOcean calls it a "Droplet"):
-   - Image: **Ubuntu 24.04 LTS**
-   - Plan: **Basic → Regular → the cheapest ($4–6/mo)**. 1 GB RAM is plenty.
-   - Region: closest to you.
-   - Authentication: **add an SSH key** if you have one (more secure), else a
-     root password.
-3. When it finishes, note its **public IP address** (e.g. `203.0.113.42`).
+### 1a. Make an SSH key (skip if you already have one)
+
+An SSH key is a password-less, far-more-secure way to log into the server. On
+your Windows machine, open **Git Bash** and run:
+
+```bash
+ls ~/.ssh/id_ed25519.pub   # if this prints a path, you already have a key — skip to 1b
+ssh-keygen -t ed25519 -C "trading-bot"
+```
+
+Press Enter through the prompts (a passphrase is optional). Then print the
+**public** half to copy later:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Copy that whole line (starts `ssh-ed25519 …`). It's safe to share; the matching
+private key in `~/.ssh/id_ed25519` never leaves your machine — never share that.
+
+### 1b. Create the DigitalOcean account and droplet
+
+1. Sign up at **digitalocean.com** (a payment method is required even for the
+   cheapest plan; new accounts often get trial credit but don't count on it).
+2. Top-left **Create → Droplets**.
+3. Choose:
+   - **Region**: closest to you (lower latency to Alpaca; any US region is fine).
+   - **OS image**: **Ubuntu → 24.04 (LTS) x64**.
+   - **Droplet type**: **Basic**.
+   - **CPU options**: **Regular** → the **cheapest** ($4–6/mo, 512 MB–1 GB RAM
+     is plenty for this bot).
+   - **Authentication**: **SSH Key → Add SSH Key**, and paste the public key
+     from step 1a. (Password login also works but is less secure.)
+   - **Hostname**: name it something like `trading-bot`.
+4. Click **Create Droplet**. After ~30 seconds it shows a **public IP address**
+   (e.g. `203.0.113.42`) — note it; every command below uses it.
 
 > **Billing note:** you're charged hourly up to the monthly cap while the VM
 > exists. *Powering it off does NOT stop billing* — to stop paying you must
