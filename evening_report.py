@@ -19,10 +19,12 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import requests
+from requests.exceptions import RequestException
 
 import config
 
@@ -36,6 +38,7 @@ HEADERS = {
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 BASELINE_FILE = "backtest_baseline.json"
 TIMEOUT = 10
+MAX_RETRIES = 4
 
 STOP_HIT_RE = re.compile(
     r"^(?P<ts>\S+ \S+),\d+ INFO\s+bot: (?P<symbol>[\w/]+): STOP HIT at "
@@ -45,10 +48,30 @@ CLOSED_RE = re.compile(
     r"(?P<qty>[\d.]+) @ (?P<price>[\d.]+) \(fill\), P&L (?P<pnl>-?[\d.]+) — (?P<reason>.+)$")
 
 
+def _request(method: str, url: str, **kwargs) -> requests.Response:
+    """HTTP request with retry + exponential backoff on transient failures
+    (network drops, SSL blips, 5xx, 429) — the same resilience the main bot
+    has. 4xx client errors are not retried; they won't fix themselves."""
+    kwargs.setdefault("timeout", TIMEOUT)
+    delay = 2.0
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = requests.request(method, url, **kwargs)
+            r.raise_for_status()
+            return r
+        except RequestException as e:
+            resp = getattr(e, "response", None)
+            status = resp.status_code if resp is not None else None
+            if status is not None and 400 <= status < 500 and status != 429:
+                raise
+            if attempt == MAX_RETRIES - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
 def _get(path: str, params: dict = None) -> dict:
-    r = requests.get(f"{TRADING_BASE}{path}", headers=HEADERS, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    return _request("GET", f"{TRADING_BASE}{path}", headers=HEADERS, params=params).json()
 
 
 def get_account() -> dict:
@@ -200,9 +223,7 @@ def post_to_discord(message: str) -> None:
     if not DISCORD_WEBHOOK_URL:
         print("DISCORD_WEBHOOK_URL not set — skipping post.", file=sys.stderr)
         return
-    r = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=TIMEOUT)
-    if r.status_code not in (200, 204):
-        raise RuntimeError(f"Discord webhook returned {r.status_code}: {r.text}")
+    _request("POST", DISCORD_WEBHOOK_URL, json={"content": message})
 
 
 def main() -> None:
