@@ -12,8 +12,8 @@ Simulation model (chosen to mirror the live bot, not to flatter results):
     stop fills at the open (worse than the stop), like a real market order.
   - Trailing stops recalculate on each completed bar from the highest high /
     lowest low since entry, and never move against the position.
-  - Position sizing: 1% of current equity to the initial stop, capped by
-    notional limits (0.95x equity for crypto, 1.9x for marginable equities).
+  - Position sizing: 1% of current equity to the initial stop, capped by the
+    same per-position and total-exposure notional limits as the live bot.
   - Extra history is fetched BEFORE the test window so every indicator is
     fully warmed up from the first tested bar.
 Per-instrument runs are independent ($100k each). The combined run shares one
@@ -31,7 +31,7 @@ import pandas as pd
 
 import config
 from bot.portfolio import Broker
-from bot.risk_manager import is_crypto
+from bot.risk_manager import cap_notional, is_crypto
 from bot.strategies import build_strategy
 from bot.strategies.base import Signal, atr as atr_fn
 
@@ -124,8 +124,9 @@ class Engine:
             return
         eq = self.equity()
         qty = (eq * scfg["risk_pct"]) / dist
-        cap = (0.95 if is_crypto(sym) else 1.9) * eq / fill
-        qty = min(qty, cap)
+        exposure = sum(p.qty * self.last_close.get(s, p.entry_price)
+                       for s, p in self.positions.items())
+        qty = cap_notional(sym, qty, fill, eq, exposure)
         if is_crypto(sym):
             qty = np.floor(qty * 1e6) / 1e6
         elif side == "short":

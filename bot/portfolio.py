@@ -34,6 +34,20 @@ log = logging.getLogger(__name__)
 
 TRANSIENT_ERRORS = (requests.exceptions.RequestException, ConnectionError, TimeoutError)
 FILL_TIMEOUT_SECONDS = 60
+POSITION_NOT_FOUND_CODE = 40410000
+
+
+class PositionNotFound(Exception):
+    """Alpaca has no position for the symbol (already closed or never held)."""
+
+
+def _error_code(e: APIError) -> Optional[int]:
+    """Alpaca's numeric error code (e.g. 40410000), or None if the error body
+    isn't the usual JSON (APIError.code raises on non-JSON bodies)."""
+    try:
+        return int(e.code)
+    except Exception:
+        return None
 
 
 def trade_symbol(symbol: str) -> str:
@@ -156,9 +170,28 @@ class Broker:
         """Alpaca positions keyed by slash-less symbol (BTCUSD)."""
         return {p.symbol: p for p in with_retry(self.trading.get_all_positions)}
 
-    def open_orders(self) -> list:
-        req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+    def gross_exposure(self) -> float:
+        """Combined absolute market value of every open position at Alpaca
+        (including unmanaged ones — they use the same account)."""
+        return sum(abs(float(p.market_value)) for p in self.open_positions().values())
+
+    def has_position(self, symbol: str) -> bool:
+        return trade_symbol(symbol) in self.open_positions()
+
+    def open_orders(self, symbol: Optional[str] = None) -> list:
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN,
+                               symbols=[trade_symbol(symbol)] if symbol else None)
         return with_retry(self.trading.get_orders, req)
+
+    def last_fill_price(self, symbol: str) -> Optional[float]:
+        """Average fill price of the most recent filled order on symbol, or
+        None. Used to record the real exit when a close confirmed late."""
+        req = GetOrdersRequest(status=QueryOrderStatus.CLOSED,
+                               symbols=[trade_symbol(symbol)], limit=10)
+        for order in with_retry(self.trading.get_orders, req):
+            if order.status == OrderStatus.FILLED and order.filled_avg_price:
+                return float(order.filled_avg_price)
+        return None
 
     def cancel_order(self, order_id) -> None:
         with_retry(self.trading.cancel_order_by_id, order_id)
@@ -189,8 +222,14 @@ class Broker:
 
     def close_position_market(self, symbol: str) -> Tuple[float, float]:
         """Liquidate the entire position via Alpaca's close endpoint (handles
-        crypto fractional dust cleanly). Returns (fill_price, filled_qty)."""
-        order = with_retry(self.trading.close_position, trade_symbol(symbol))
+        crypto fractional dust cleanly). Returns (fill_price, filled_qty).
+        Raises PositionNotFound if Alpaca holds no position for the symbol."""
+        try:
+            order = with_retry(self.trading.close_position, trade_symbol(symbol))
+        except APIError as e:
+            if _error_code(e) == POSITION_NOT_FOUND_CODE:
+                raise PositionNotFound(symbol) from e
+            raise
         return self._await_fill(order)
 
     def _await_fill(self, order) -> Tuple[float, float]:

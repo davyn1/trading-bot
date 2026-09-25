@@ -9,3 +9,6 @@ plotly>=6.0
 
 # Backtesting only (python -m bot.backtest)
 matplotlib>=3.8
+
+# Tests only (python -m pytest tests)
+pytest>=8.0

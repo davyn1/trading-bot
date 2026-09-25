@@ -42,6 +42,14 @@ RISK = {
     # Halt all NEW entries for the rest of the ET day once the account is
     # down this fraction of start-of-day equity (realized + unrealized).
     "daily_drawdown_halt_pct": 0.03,
+    # Notional caps (added 2026-09-24). Stop-based sizing alone put 446 SPY
+    # (~$345k, 3.4x equity) on a 2x-ATR 15m stop, limited only by margin
+    # buying power. These cap the dollar size regardless of stop width.
+    # Max market value of any single position, as a fraction of equity.
+    "max_position_pct_equity": 0.5,
+    # Max combined market value of ALL open positions (long + short), as a
+    # fraction of equity. 1.0 = never trade on margin.
+    "max_total_exposure_pct_equity": 1.0,
 }
 
 # --- Per-strategy parameters ------------------------------------------------

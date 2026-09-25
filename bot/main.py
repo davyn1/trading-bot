@@ -16,7 +16,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import config
-from bot.portfolio import Broker, trade_symbol
+from bot.portfolio import Broker, PositionNotFound, trade_symbol
 from bot.risk_manager import RiskManager, is_crypto
 from bot.state import StateStore
 from bot.strategies import Signal, build_strategy
@@ -178,7 +178,13 @@ class Bot:
             if self.risk.stop_hit(pos, price):
                 log.info("%s: STOP HIT at %.4f (stop %.4f, %s)", symbol, price,
                          pos["stop_price"], pos["side"])
-                self.close_position(symbol, reason="stop hit")
+                # Isolated per symbol: one failed close must never skip the
+                # stop checks (or candle evaluation) of every other position.
+                try:
+                    self.close_position(symbol, reason="stop hit")
+                except Exception as e:
+                    log.error("%s: stop exit failed — will retry next loop: %s",
+                              symbol, e, exc_info=True)
 
     # ------------------------------------------------------ candle evaluation
     def evaluate_candles(self) -> None:
@@ -261,7 +267,8 @@ class Bot:
         qty = self.risk.position_size(
             symbol=symbol, side=side, equity=float(account.equity),
             buying_power=float(account.buying_power), price=price,
-            stop_distance=stop_distance, risk_pct=cfg["risk_pct"])
+            stop_distance=stop_distance, risk_pct=cfg["risk_pct"],
+            open_exposure=self.broker.gross_exposure())
         if qty <= 0:
             return
 
@@ -278,7 +285,27 @@ class Bot:
         pos = self.state.get_position(symbol)
         if pos is None:
             return
-        fill_price, fill_qty = self.broker.close_position_market(symbol)
+        if self.broker.open_orders(symbol):
+            # A previous close is still working (e.g. it timed out waiting
+            # for a fill). Submitting another would be rejected or oversell.
+            log.warning("%s: exit pending — an order is already open at Alpaca, "
+                        "waiting for it instead of resubmitting", symbol)
+            return
+        try:
+            fill_price, fill_qty = self.broker.close_position_market(symbol)
+        except PositionNotFound:
+            # Already flat at Alpaca (an earlier close filled after we stopped
+            # waiting, or it was closed by hand). Record it and stop managing
+            # it — retrying forever is what wedged the loop on 2026-09-18/22.
+            fill_price = (self.broker.last_fill_price(symbol)
+                          or self.broker.latest_price(symbol))
+            fill_qty = pos["qty"]
+            log.warning("%s: no position at Alpaca — recording exit at %.4f and "
+                        "dropping it from state", symbol, fill_price)
+        except TimeoutError as e:
+            log.warning("%s: exit not confirmed yet (%s) — will check again next loop",
+                        symbol, e)
+            return
         pnl = self._log_closed_trade(pos, symbol, fill_price, fill_qty)
         self.state.daily["realized_pnl"] = self.state.daily.get("realized_pnl", 0.0) + pnl
         self.state.remove_position(symbol)
@@ -303,17 +330,18 @@ class Bot:
                                                for s in config.INSTRUMENTS))
         self.reconcile()
         while True:
-            try:
-                self.roll_daily()
-                self.check_stops()
-                self.evaluate_candles()
-            except KeyboardInterrupt:
-                raise
-            except Exception as e:
-                log.error("Loop error (backing off 60s): %s", e, exc_info=True)
-                time.sleep(60)
-                continue
-            time.sleep(config.POLL_INTERVAL_SECONDS)
+            # Each step runs even if an earlier one failed: a daily-P&L error
+            # must not stop stop-checks from running, and vice versa.
+            failed = False
+            for step in (self.roll_daily, self.check_stops, self.evaluate_candles):
+                try:
+                    step()
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    log.error("Loop error in %s: %s", step.__name__, e, exc_info=True)
+                    failed = True
+            time.sleep(60 if failed else config.POLL_INTERVAL_SECONDS)
 
 
 def main() -> None:

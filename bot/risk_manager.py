@@ -19,6 +19,25 @@ def is_crypto(symbol: str) -> bool:
     return "/" in symbol
 
 
+def cap_notional(symbol: str, qty: float, price: float, equity: float,
+                 open_exposure: float) -> float:
+    """Shrink qty so the position respects both notional caps in config.RISK:
+    its own market value <= max_position_pct_equity * equity, and total
+    exposure (open_exposure + this position) <= max_total_exposure_pct_equity
+    * equity. Returns 0 when there is no room left. Shared by the live bot
+    and the backtester so both size identically."""
+    per_position = config.RISK["max_position_pct_equity"] * equity
+    room = config.RISK["max_total_exposure_pct_equity"] * equity - open_exposure
+    max_notional = max(0.0, min(per_position, room))
+    if qty * price > max_notional:
+        capped = max_notional / price
+        log.info("%s: sized notional %.2f exceeds cap %.2f (per-position %.2f, "
+                 "exposure room %.2f) — scaling qty %.6f to %.6f", symbol,
+                 qty * price, max_notional, per_position, room, qty, capped)
+        qty = capped
+    return qty
+
+
 class RiskManager:
     def __init__(self, state):
         self.state = state
@@ -26,13 +45,16 @@ class RiskManager:
     # --- position sizing ----------------------------------------------------
     def position_size(self, *, symbol: str, side: str, equity: float,
                       buying_power: float, price: float, stop_distance: float,
-                      risk_pct: float) -> float:
+                      risk_pct: float, open_exposure: float = 0.0) -> float:
         """Quantity such that (stop_distance * qty) == risk_pct * equity,
-        capped by available buying power."""
+        capped by the per-position and total-exposure notional limits in
+        config.RISK and by available buying power. open_exposure is the
+        combined absolute market value of positions already held."""
         if stop_distance <= 0 or price <= 0:
             log.warning("%s: invalid stop distance %.4f — no trade", symbol, stop_distance)
             return 0.0
         qty = (equity * risk_pct) / stop_distance
+        qty = cap_notional(symbol, qty, price, equity, open_exposure)
 
         max_notional = buying_power * 0.95  # small buffer for price drift
         if qty * price > max_notional:

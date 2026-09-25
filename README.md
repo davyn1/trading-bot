@@ -28,6 +28,11 @@ fetched on startup.
 - **Stop-based sizing** — every position is sized so that a move from entry to
   the initial stop equals exactly **1% of account equity**. Wider stops mean
   proportionally smaller positions; risk per trade stays constant.
+- **Notional caps** — stop-based sizing alone can produce very large positions
+  when the stop is tight, so dollar size is capped separately: no single
+  position may exceed **0.5× equity**, and all open positions combined may not
+  exceed **1.0× equity** (no margin). A new entry is scaled down to fit, or
+  skipped if there's no room.
 - **Trailing stops** recalculate ATR on each completed candle, trail from the
   extreme since entry, and never move against the position. Triggers are checked
   on every price update, not just on candle close.
@@ -39,6 +44,10 @@ fetched on startup.
 - **State recovery** — on startup the bot reconciles with Alpaca (open positions
   and orders), resumes managing them, and persists all state to `state.json`
   after every change, so a crash or restart never orphans a position.
+- **Fault-isolated exits** — each symbol's stop check runs independently, so a
+  failed exit on one position can't block stops on the others. If Alpaca
+  reports a position is already gone, the exit is recorded and the position
+  dropped; an unconfirmed exit is re-checked rather than resubmitted.
 
 All per-strategy risk parameters and the portfolio-level thresholds are
 configurable in [`config.py`](config.py).
@@ -58,6 +67,7 @@ bot/
   state.py                JSON state persistence + trade/PNL CSV logs
   backtest.py             historical backtester with slippage modeling
   main.py                 orchestrator / main loop
+tests/                    pytest regression tests (exits, sizing caps)
 config.py                 instrument→strategy mapping + all parameters
 dashboard.py              Streamlit monitoring dashboard
 morning_briefing.py       Discord morning briefing (scheduled)
@@ -95,6 +105,12 @@ an equity-curve chart to `backtest_results.png`.
 
 ```bash
 python -m bot.main
+```
+
+**Run the tests** (no API keys needed):
+
+```bash
+python -m pytest tests
 ```
 
 **Monitoring dashboard** (live positions, signals, and P&L):
