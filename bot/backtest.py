@@ -1,6 +1,7 @@
 """Backtester: runs the live strategy code against Alpaca historical data.
 
-Usage:  python -m bot.backtest [--months 6]
+Usage:  python -m bot.backtest [--months 6] [--max-position 0.5]
+                               [--max-exposure 1.0] [--save-baseline]
 
 Simulation model (chosen to mirror the live bot, not to flatter results):
   - Signals evaluate on completed candles via the SAME Strategy classes the
@@ -41,9 +42,12 @@ SLIPPAGE = 0.0005          # 0.05% adverse, applied to every fill
 START_EQUITY = 100_000.0
 COMMISSION = 0.0           # Alpaca is commission-free
 
-BARS_PER_DAY = {15: 26, 60: 24, 240: 2}   # equities 6.5h/day; crypto 24/7 at 60m
+# Equity bars per 6.5h regular session (partial first/last bars rounded up).
+# Crypto history is sized from calendar hours instead, so it doesn't use this.
+BARS_PER_DAY = {15: 26, 30: 13, 60: 7, 120: 4, 240: 2}
 TRADING_DAYS_PER_MONTH = 21
 CAL_DAYS_PER_MONTH = 30.44
+BASELINE_FILE = "backtest_baseline.json"  # read by evening_report.py
 
 
 @dataclass
@@ -310,9 +314,19 @@ def fetch_history(broker: Broker, months: int) -> Dict[str, pd.DataFrame]:
 
 
 # --- chart ------------------------------------------------------------------
-# dataviz reference palette (light mode), fixed order per instrument
+# dataviz reference palette (light mode), fixed order per instrument.
+# Instruments without a fixed color draw from EXTRA_COLORS in config order.
 PALETTE = {"SPY": "#2a78d6", "QQQ": "#008300", "BTC/USD": "#e87ba4",
            "GLD": "#eda100", "USO": "#1baf7a"}
+EXTRA_COLORS = ["#7c5cd6", "#d6452a", "#4a4a45", "#00a3b4", "#b36b00",
+                "#9c2a8a", "#5f8f00", "#c2185b"]
+
+
+def color_for(sym: str) -> str:
+    if sym in PALETTE:
+        return PALETTE[sym]
+    extras = [s for s in config.INSTRUMENTS if s not in PALETTE]
+    return EXTRA_COLORS[extras.index(sym) % len(EXTRA_COLORS)]
 CHART_INK = {"surface": "#fcfcfb", "primary": "#0b0b0b", "secondary": "#52514e",
              "muted": "#898781", "grid": "#e1e0d9"}
 
@@ -337,14 +351,14 @@ def plot_results(single: dict, combined: dict, months: int, path: str) -> None:
         ax.tick_params(colors=CHART_INK["muted"], labelsize=9)
 
     ax1.plot(combined["daily"].index, combined["daily"].values,
-             color=PALETTE["SPY"], linewidth=2)
+             color=CHART_INK["primary"], linewidth=2)
     ax1.axhline(START_EQUITY, color=CHART_INK["muted"], linewidth=1, linestyle=":")
 
     for sym, m in single.items():
-        ax2.plot(m["daily"].index, m["daily"].values, color=PALETTE[sym],
+        ax2.plot(m["daily"].index, m["daily"].values, color=color_for(sym),
                  linewidth=2, label=sym)
     ax2.axhline(START_EQUITY, color=CHART_INK["muted"], linewidth=1, linestyle=":")
-    ax2.legend(loc="upper left", frameon=False, fontsize=9,
+    ax2.legend(loc="upper left", frameon=False, fontsize=9, ncol=2,
                labelcolor=CHART_INK["secondary"])
 
     fig.suptitle(f"Backtest — last {months} months, 0.05% slippage per fill",
@@ -368,8 +382,22 @@ def main() -> None:
     parser.add_argument("--months", type=int, default=6)
     parser.add_argument("--slippage", type=float, default=SLIPPAGE,
                         help="slippage per fill as a fraction (default 0.0005 = 0.05%%)")
+    parser.add_argument("--max-position", type=float,
+                        default=config.RISK["max_position_pct_equity"],
+                        help="per-position notional cap as a multiple of equity "
+                             "(default from config.RISK)")
+    parser.add_argument("--max-exposure", type=float,
+                        default=config.RISK["max_total_exposure_pct_equity"],
+                        help="total-exposure notional cap as a multiple of equity "
+                             "(default from config.RISK)")
+    parser.add_argument("--save-baseline", action="store_true",
+                        help=f"write per-strategy results to {BASELINE_FILE} "
+                             "(read by evening_report.py)")
     args = parser.parse_args()
     SLIPPAGE = args.slippage
+    # Overrides apply to this run only; config.py on disk is unchanged.
+    config.RISK["max_position_pct_equity"] = args.max_position
+    config.RISK["max_total_exposure_pct_equity"] = args.max_exposure
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s")
@@ -445,6 +473,8 @@ def main() -> None:
     print("\n" + "=" * 100)
     print(f"BACKTEST RESULTS — last {args.months} months, fills at next bar open, "
           f"{SLIPPAGE:.2%} slippage per fill, $0 commission")
+    print(f"Notional caps: {args.max_position:g}x equity per position, "
+          f"{args.max_exposure:g}x total exposure")
     print("=" * 100)
     print("\nPer instrument (independent $100k accounts):\n")
     print(table.to_string(index=False))
@@ -459,6 +489,57 @@ def main() -> None:
     if m["sharpe"] < 0:
         print("  ⚠ Combined portfolio Sharpe is NEGATIVE over this window.")
     print("\nEquity curve chart saved to backtest_results.png")
+
+    if args.save_baseline:
+        save_baseline(single_metrics, all_single_trades, args, window_start)
+        print(f"Baseline saved to {BASELINE_FILE}")
+
+
+def save_baseline(single_metrics: dict, single_trades: dict, args,
+                  window_start: pd.Timestamp) -> None:
+    """Write per-strategy stats in the shape evening_report.py expects."""
+    import json
+
+    per_instrument = {
+        sym: {"trades": m["trades"], "win_rate": round(m["win_rate"], 4),
+              "sharpe": round(m["sharpe"], 3),
+              "total_return": round(m["total_return"], 4),
+              "max_dd": round(m["max_dd"], 4),
+              "strategy": config.INSTRUMENTS[sym]["strategy"]}
+        for sym, m in single_metrics.items()
+    }
+    baseline = {}
+    for strat in config.STRATEGIES:
+        syms = [s for s in single_metrics if config.INSTRUMENTS[s]["strategy"] == strat]
+        pnls = [t.pnl for s in syms for t in single_trades[s]]
+        if not pnls:
+            continue
+        # Trade-count-weighted average of each instrument's Sharpe.
+        sharpe = sum(single_metrics[s]["sharpe"] * single_metrics[s]["trades"]
+                     for s in syms) / len(pnls)
+        baseline[strat] = {
+            "win_rate": round(sum(1 for x in pnls if x > 0) / len(pnls), 4),
+            "avg_trade_pnl_pct": round(100 * float(np.mean(pnls)) / START_EQUITY, 4),
+            "sharpe": round(sharpe, 3),
+            "trades": len(pnls),
+            "instruments": syms,
+        }
+    baseline["_meta"] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "months": args.months,
+        "window_start": window_start.isoformat(),
+        "slippage": SLIPPAGE,
+        "max_position_pct_equity": args.max_position,
+        "max_total_exposure_pct_equity": args.max_exposure,
+        "note": "Per-strategy stats pooled from independent single-instrument "
+                "backtests (python -m bot.backtest --save-baseline). "
+                "avg_trade_pnl_pct = mean trade P&L as % of a $100k starting "
+                "account. sharpe is trade-count-weighted average of each "
+                "instrument's daily-curve Sharpe.",
+        "per_instrument": per_instrument,
+    }
+    with open(BASELINE_FILE, "w", encoding="utf-8") as f:
+        json.dump(baseline, f, indent=2)
 
 
 if __name__ == "__main__":

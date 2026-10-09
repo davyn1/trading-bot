@@ -14,7 +14,10 @@ Each instrument is mapped to a strategy entirely in [`config.py`](config.py),
 so adding or removing an instrument is a one-line change with no strategy-code
 edits. All strategies evaluate signals only on **completed candles**, and no
 strategy trades until its indicators are fully warmed up from historical data
-fetched on startup.
+fetched on startup. Equity candles use the **regular session only** (09:30–16:00
+ET, anchored to the open — e.g. 4-hour candles are 09:30 and 13:30); thin
+pre/post-market bars are excluded so they can't distort SMA, standard deviation
+or ATR. Crypto uses 24/7 candles.
 
 | Strategy | Instruments | Timeframe | Entry / exit | Stop |
 |---|---|---|---|---|
@@ -100,6 +103,14 @@ python -m bot.backtest --months 6 [--slippage 0.0005]
 Reports per-instrument and portfolio metrics (win rate, profit factor, max
 drawdown, Sharpe, return), flags any strategy with a negative Sharpe, and saves
 an equity-curve chart to `backtest_results.png`.
+
+Options:
+- `--max-position 0.5 --max-exposure 1.0`: override the notional caps for
+  this run only (defaults come from `config.RISK`). Useful for comparing sizing
+  rules side by side.
+- `--save-baseline`: write per-strategy results to `backtest_baseline.json`,
+  which `evening_report.py` compares live trades against. Re-run after changing
+  strategy or risk parameters.
 
 **Run the bot:**
 

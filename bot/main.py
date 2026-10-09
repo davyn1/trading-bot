@@ -16,7 +16,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import config
-from bot.portfolio import Broker, PositionNotFound, trade_symbol
+from bot.portfolio import SESSION_OPEN_MINUTE, Broker, PositionNotFound, trade_symbol
 from bot.risk_manager import RiskManager, is_crypto
 from bot.state import StateStore
 from bot.strategies import Signal, build_strategy
@@ -38,13 +38,14 @@ def now_et() -> datetime:
     return datetime.now(timezone.utc).astimezone(ET)
 
 
-def last_boundary(ts_et: datetime, timeframe_minutes: int) -> datetime:
-    """Most recent candle boundary at or before ts, anchored to ET midnight so
-    equity candles align to US/Eastern sessions (15m/1h boundaries coincide
-    with UTC ones; the 4h anchor is what actually needs ET alignment)."""
-    midnight = ts_et.replace(hour=0, minute=0, second=0, microsecond=0)
-    elapsed_min = int((ts_et - midnight).total_seconds() // 60)
-    return midnight + timedelta(minutes=(elapsed_min // timeframe_minutes) * timeframe_minutes)
+def last_boundary(ts_et: datetime, timeframe_minutes: int, anchor_minute: int = 0) -> datetime:
+    """Most recent candle boundary at or before ts on a grid anchored at
+    anchor_minute after ET midnight. Equities anchor at the 09:30 open to
+    match session_bars (60m candles end 10:30, 11:30, ...); crypto at 0."""
+    anchor = ts_et.replace(hour=0, minute=0, second=0, microsecond=0) \
+        + timedelta(minutes=anchor_minute)
+    elapsed_min = int((ts_et - anchor).total_seconds() // 60)
+    return anchor + timedelta(minutes=(elapsed_min // timeframe_minutes) * timeframe_minutes)
 
 
 class Bot:
@@ -194,7 +195,8 @@ class Bot:
             cfg = self.strategy_cfg[symbol]
             if not is_crypto(symbol) and not market_open:
                 continue
-            boundary = last_boundary(ts, cfg["timeframe_minutes"])
+            anchor = 0 if is_crypto(symbol) else SESSION_OPEN_MINUTE
+            boundary = last_boundary(ts, cfg["timeframe_minutes"], anchor)
             if self._evaluated_boundary.get(symbol) == boundary:
                 continue
             try:

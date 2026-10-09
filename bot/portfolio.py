@@ -6,10 +6,12 @@ and retry with exponential backoff on transient API errors.
 """
 
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -35,6 +37,14 @@ log = logging.getLogger(__name__)
 TRANSIENT_ERRORS = (requests.exceptions.RequestException, ConnectionError, TimeoutError)
 FILL_TIMEOUT_SECONDS = 60
 POSITION_NOT_FOUND_CODE = 40410000
+
+# US equity regular session, as minutes after midnight ET (09:30-16:00).
+ET = ZoneInfo("America/New_York")
+SESSION_OPEN_MINUTE = 9 * 60 + 30
+SESSION_CLOSE_MINUTE = 16 * 60
+# How long after a candle's end to accept it even if its final base bar never
+# printed (thin names can have no IEX trades in a 15-minute slice).
+SESSION_BAR_GRACE = pd.Timedelta(minutes=5)
 
 
 class PositionNotFound(Exception):
@@ -75,6 +85,56 @@ def with_retry(fn, *args, retries: int = 4, **kwargs):
             log.warning("Connection error, retrying in %.0fs: %s", delay, e)
         time.sleep(delay)
         delay *= 2
+
+
+def session_base_minutes(timeframe_minutes: int) -> int:
+    """Base bar size for building equity candles: the largest size that
+    divides both the timeframe and 30, so base bars tile the 09:30 open
+    exactly (15 -> 15, 30 -> 30, 60 -> 30, 240 -> 30)."""
+    return math.gcd(timeframe_minutes, 30)
+
+
+def session_bars(df: pd.DataFrame, timeframe_minutes: int, base_minutes: int,
+                 now: datetime) -> pd.DataFrame:
+    """Regular-session candles from base bars (tz-aware UTC index = bar start).
+
+    Pre/post-market bars are dropped: on the IEX feed they carry ~1% of
+    regular-hours volume, and their tiny ranges distort SMA/std/ATR (a lower
+    ATR means a tighter stop and a bigger position). Candles are anchored to
+    the 09:30 ET open, so a 60m day is 09:30, 10:30, ... 15:30 (the last one
+    30 minutes long, ending at the 16:00 close).
+
+    A candle is returned only once complete: its end (start + timeframe,
+    capped at 16:00) has passed AND its final base bar has been published —
+    or GRACE has elapsed, for thin names where IEX may have no final print."""
+    if df.empty:
+        return df
+    et = df.index.tz_convert(ET)
+    minute_of_day = et.hour * 60 + et.minute
+    in_session = (minute_of_day >= SESSION_OPEN_MINUTE) & (minute_of_day < SESSION_CLOSE_MINUTE)
+    df, et = df[in_session], et[in_session]
+    if df.empty:
+        return df
+
+    tf = pd.Timedelta(minutes=timeframe_minutes)
+    base = pd.Timedelta(minutes=base_minutes)
+    session_open = et.normalize() + pd.Timedelta(minutes=SESSION_OPEN_MINUTE)
+    candle_start = session_open + ((et - session_open) // tf) * tf
+    # Keep the source tz object: mixing tz representations across symbols
+    # (e.g. with crypto bars) breaks datetime indexes built from both.
+    grouped = df.groupby(candle_start.tz_convert(df.index.tz))
+    out = grouped.agg(open=("open", "first"), high=("high", "max"), low=("low", "min"),
+                      close=("close", "last"), volume=("volume", "sum"))
+    last_base_start = grouped.apply(lambda g: g.index[-1])
+
+    starts_et = out.index.tz_convert(ET)
+    session_close = starts_et.normalize() + pd.Timedelta(minutes=SESSION_CLOSE_MINUTE)
+    end = pd.Series((starts_et + tf).where(starts_et + tf < session_close, session_close)
+                    .tz_convert(df.index.tz), index=out.index)
+    now_ts = pd.Timestamp(now)
+    has_final_bar = last_base_start + base >= end
+    complete = (end <= now_ts) & (has_final_bar | (end + SESSION_BAR_GRACE <= now_ts))
+    return out[complete.values]
 
 
 def to_timeframe(minutes: int) -> TimeFrame:
@@ -125,6 +185,8 @@ class Broker:
     def get_bars(self, symbol: str, timeframe_minutes: int, bars_needed: int) -> pd.DataFrame:
         """Fetch recent bars and return only COMPLETED candles (a bar whose
         start + timeframe is still in the future is partial and dropped).
+        Equities are regular-session only, anchored to the 09:30 ET open
+        (see session_bars); crypto uses Alpaca's native 24/7 bars.
         Index is tz-aware UTC, oldest first."""
         now = datetime.now(timezone.utc)
         # Span estimate: crypto trades ~24/7; equities ~6.5h/day plus
@@ -133,14 +195,17 @@ class Broker:
         # a 1-day pad left SPY short of warmup on a Monday morning.
         factor = 1.5 if is_crypto(symbol) else 6.5
         start = now - timedelta(minutes=int(timeframe_minutes * bars_needed * factor) + 4320)
-        tf = to_timeframe(timeframe_minutes)
 
         if is_crypto(symbol):
-            req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=tf, start=start)
+            req = CryptoBarsRequest(symbol_or_symbols=symbol,
+                                    timeframe=to_timeframe(timeframe_minutes), start=start)
             bars = with_retry(self.crypto_data.get_crypto_bars, req)
         else:
-            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=tf, start=start,
-                                   adjustment=Adjustment.SPLIT,
+            # Equities: fetch base bars that tile the 09:30 open, then keep
+            # the regular session only and aggregate up (see session_bars).
+            base = session_base_minutes(timeframe_minutes)
+            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=to_timeframe(base),
+                                   start=start, adjustment=Adjustment.SPLIT,
                                    feed=DataFeed(config.DATA_FEED))
             bars = with_retry(self.stock_data.get_stock_bars, req)
 
@@ -150,6 +215,8 @@ class Broker:
         if isinstance(df.index, pd.MultiIndex):
             df = df.xs(symbol, level="symbol")
         df = df[["open", "high", "low", "close", "volume"]].sort_index()
+        if not is_crypto(symbol):
+            return session_bars(df, timeframe_minutes, base, now).tail(bars_needed + 10)
         # Keep completed candles only — never evaluate a partially formed bar.
         cutoff = now - timedelta(minutes=timeframe_minutes)
         df = df[df.index <= cutoff]
