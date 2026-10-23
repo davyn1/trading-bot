@@ -89,12 +89,31 @@ regular-session candles unless noted.
   selection, not timing. Its real strength was 2022 (−1% to −3% vs −20% to
   −56% for buy-and-hold).
 
+## Known open issues (fix before the bot runs again)
+
+1. **Late entry fills are lost.** `Broker._await_fill` gives up after
+   `FILL_TIMEOUT_SECONDS` (60s) and raises; `Bot.open_position` then never
+   records the position, so it's held at Alpaca with no stop and no exit.
+   Paper market orders at the 09:30 open took 3–5 minutes to fill. Startup
+   reconciliation adopts such positions, but only on restart.
+2. **No HTTP timeouts.** alpaca-py (`alpaca/common/rest.py`, v0.44) calls
+   `session.request` without a timeout, so a stalled request can hang the loop
+   forever (this happened 2026-09-22: state.json stopped updating, no further
+   log lines for two days).
+
 ## History worth knowing
 
-- 2026-09 incident: a stop exit that failed once (Alpaca `40410000` "position
-  not found") retried forever and aborted the whole loop, so SPY's stop and
-  exit never fired; stop-based sizing with no notional cap had put ~3.4x equity
-  into SPY. Fixed in `8a41100` (isolated exits, notional caps). TSLA was never a
-  "phantom" — it's a configured stock_momentum instrument.
+- 2026-09 incident, confirmed from Alpaca order history plus the server's
+  state.json/bot.log: the bot bought 446 SPY at the 2026-09-04 open; the fill
+  took 3.5 minutes, the 60s wait timed out, and SPY was **never recorded**, so
+  its stop and exit were never checked (open issue #1). Exits on TSLA (09-04)
+  and USO (09-21) also filled after the timeout, so both stayed in state; each
+  later "stop hit" retried the close, got `40410000` "position not found", and
+  aborted the whole loop. Stop-based sizing with no notional cap had made SPY
+  ~3.4x equity. Fixed in `8a41100` (isolated exits, position-not-found
+  handling, notional caps); open issues #1 and #2 remain.
 - Pre/post-market IEX bars used to leak into equity candles; equities are now
   regular-session only (`portfolio.session_bars`).
+- README screenshots (`docs/screenshots/`) were rendered from the real
+  dashboard fed by a 6-month backtest (via a scratch wrapper, not in the repo),
+  in light and dark, with GitHub border colors (`#d0d7de` / `#30363d`).

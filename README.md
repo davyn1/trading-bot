@@ -8,6 +8,37 @@ explicitly configured to.
 
 Built on the official [`alpaca-py`](https://github.com/alpacahq/alpaca-py) SDK.
 
+## Dashboard
+
+A read-only Streamlit dashboard shows account status, live signals for every
+instrument, open positions with their stops, the equity curve, P&L by strategy
+and the full trade history. It computes indicators with the same code the bot
+trades with, so what it shows is what the bot sees.
+
+> **Note:** these screenshots show the dashboard populated with a 6-month
+> full-portfolio **backtest** (Apr–Oct 2026, simulated fills), not live trading
+> results. Candles and signals are live market data.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-overview-dark.png">
+  <img alt="Dashboard overview: account tiles, SPY 15-minute chart with mean-reversion bands, entry and stop lines, and the active-signals panel" src="docs/screenshots/dashboard-overview.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-performance-dark.png">
+  <img alt="Dashboard performance: open positions table, daily equity curve, cumulative realized P&L by strategy, and per-strategy statistics" src="docs/screenshots/dashboard-performance.png">
+</picture>
+
+<details>
+<summary>Trade history</summary>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-trades-dark.png">
+  <img alt="Dashboard trade history table with timestamp, instrument, strategy, direction, entry and exit prices, P&L and position size" src="docs/screenshots/dashboard-trades.png">
+</picture>
+
+</details>
+
 ## Engineering highlights
 
 - **Fault-tolerant order handling.** Market orders carry a `client_order_id`,
@@ -36,27 +67,40 @@ Built on the official [`alpaca-py`](https://github.com/alpacahq/alpaca-py) SDK.
 - **Tested.** A `pytest` regression suite that needs no API keys covers exit
   failures, sizing caps and session candle building.
 
-### Postmortem: the stuck stop (Sept 2026)
+### Postmortem: the unmanaged SPY position (Sept 2026)
 
-During paper trading, an SPY mean-reversion position ran for three weeks at
-about 3.4× leverage and lost ~6% of equity without its stop ever firing. The
-investigation found three compounding bugs:
+During paper trading, an SPY mean-reversion position sat open for three weeks
+at about 3.4× leverage and was down ~6% of equity at its worst. The bot never
+checked its stop. The broker's order history, compared against the bot's
+state file and logs, showed why:
 
-1. **An exit that failed once retried forever.** An exit order on another
-   symbol most likely filled after the bot had stopped waiting for it. The
-   retry then got Alpaca `40410000` ("position not found") on every loop, and
-   the exception aborted the whole loop iteration. That silently skipped every
-   other position's stop checks and candle evaluations.
-2. **No cap on position size.** Stop-based sizing on a tight 15-minute stop
+1. **Fills at the open took minutes, but the bot waited 60 seconds.** Paper
+   market orders placed at the 09:30 open filled 3–5 minutes later. The SPY
+   entry timed out, so the bot never recorded a position it actually held. It
+   had no stop or exit on it and nothing to manage. Exits on TSLA and USO timed
+   out the same way, so those positions stayed in the bot's state after they
+   had closed.
+2. **A failed exit retried forever.** Each retry against an already-closed
+   position got Alpaca `40410000` ("position not found"). The exception
+   aborted the whole loop iteration, which skipped stop checks and candle
+   evaluation for every other instrument.
+3. **No cap on position size.** Stop-based sizing on a tight 15-minute stop
    asked for ~$345k of SPY on a ~$100k account. Only margin buying power
    bounded it.
-3. **Pre/post-market bars in the indicators.** Their tiny ranges deflated ATR,
+4. **Pre/post-market bars in the indicators.** Their tiny ranges deflated ATR,
    which tightens stops and inflates position size.
+5. **A request with no timeout.** The bot's state file stopped updating on
+   Sept 22, and the bot stayed silent for two days. The broker SDK sends HTTP
+   requests without a timeout, so one stalled request can block the loop
+   indefinitely.
 
-The fixes were isolated per-symbol exits, treating "position not found" as
-already closed, never resubmitting while an exit is pending, notional caps
-shared by the live bot and the backtester, and regular-session-only candles.
-Each fix has a regression test.
+**Fixed:** isolated per-symbol exits, "position not found" treated as already
+closed, no resubmission while an exit is pending, notional caps shared by the
+live bot and the backtester, and regular-session-only candles. Each fix has a
+regression test.
+
+**Still open:** recording an entry whose fill confirms late (#1), and request
+timeouts (#5). The bot stays offline until both are fixed.
 
 ### What the backtests show
 
@@ -138,7 +182,8 @@ bot/
   state.py                JSON state persistence + trade/PNL CSV logs
   backtest.py             historical backtester with slippage modeling
   main.py                 orchestrator / main loop
-tests/                    pytest regression tests (exits, sizing caps)
+tests/                    pytest regression tests (exits, sizing caps, session candles)
+docs/screenshots/         dashboard screenshots used in this README
 config.py                 instrument→strategy mapping + all parameters
 dashboard.py              Streamlit monitoring dashboard
 morning_briefing.py       Discord morning briefing (scheduled)
@@ -192,7 +237,8 @@ python -m bot.main
 python -m pytest tests
 ```
 
-**Monitoring dashboard** (live positions, signals, and P&L):
+**Monitoring dashboard** (live positions, signals, and P&L; see
+[screenshots](#dashboard)):
 
 ```bash
 python -m streamlit run dashboard.py
