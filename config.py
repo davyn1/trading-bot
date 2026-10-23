@@ -9,8 +9,8 @@ import os
 
 from dotenv import load_dotenv
 
-# Trust the Windows certificate store so HTTPS works behind Davy's
-# TLS-intercepting VPN (no-op off VPN). config is imported before any network
+# Trust the OS certificate store so HTTPS works behind TLS-intercepting
+# proxies/VPNs (no effect otherwise). config is imported before any network
 # code, so injecting here covers every request the bot makes.
 try:
     import truststore

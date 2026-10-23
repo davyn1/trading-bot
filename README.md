@@ -8,6 +8,74 @@ explicitly configured to.
 
 Built on the official [`alpaca-py`](https://github.com/alpacahq/alpaca-py) SDK.
 
+## Engineering highlights
+
+- **Fault-tolerant order handling.** Market orders carry a `client_order_id`,
+  so a submit retried after a network error can't create a duplicate. Every
+  fill is confirmed against the broker before it's recorded. Each position's
+  exit is isolated, so one failing order can't block stop checks on the others.
+- **Layered risk controls.** Stop-based sizing keeps per-trade risk at 1% of
+  equity. Notional caps bound position size (0.5× equity per position, 1.0×
+  total) regardless of stop width. A daily-drawdown kill switch and a
+  correlation filter sit on top.
+- **Crash-safe state.** State is written atomically (temp file + `os.replace`)
+  after every change. On startup the bot reconciles against the broker's actual
+  positions and orders, so a restart never leaves a position without its stop.
+- **Data correctness.** Signals use completed candles only. Equity candles are
+  rebuilt from the regular session and anchored to the 09:30 open, so thin
+  pre/post-market prints can't distort indicators. Strategies wait until their
+  indicators are fully warmed up.
+- **Honest backtesting.** The backtester runs the *same* strategy classes as the
+  live bot and fills at the next bar's open with slippage on every fill. Stops
+  are checked intrabar and gaps fill at the worse price. Parameters are judged
+  on a held-out period, against buy-and-hold, and on stock baskets chosen
+  without hindsight.
+- **Operations.** Runs 24/7 under `systemd` with auto-restart. A
+  localhost-only Streamlit dashboard is reached over an SSH tunnel. Discord
+  morning and evening reports retry with exponential backoff.
+- **Tested.** A `pytest` regression suite that needs no API keys covers exit
+  failures, sizing caps and session candle building.
+
+### Postmortem: the stuck stop (Sept 2026)
+
+During paper trading, an SPY mean-reversion position ran for three weeks at
+about 3.4× leverage and lost ~6% of equity without its stop ever firing. The
+investigation found three compounding bugs:
+
+1. **An exit that failed once retried forever.** An exit order on another
+   symbol most likely filled after the bot had stopped waiting for it. The
+   retry then got Alpaca `40410000` ("position not found") on every loop, and
+   the exception aborted the whole loop iteration. That silently skipped every
+   other position's stop checks and candle evaluations.
+2. **No cap on position size.** Stop-based sizing on a tight 15-minute stop
+   asked for ~$345k of SPY on a ~$100k account. Only margin buying power
+   bounded it.
+3. **Pre/post-market bars in the indicators.** Their tiny ranges deflated ATR,
+   which tightens stops and inflates position size.
+
+The fixes were isolated per-symbol exits, treating "position not found" as
+already closed, never resubmitting while an exit is pending, notional caps
+shared by the live bot and the backtester, and regular-session-only candles.
+Each fix has a regression test.
+
+### What the backtests show
+
+The strategies are textbook starting points, and the backtester is used to
+check them, not to sell them. Over the tested windows, **none reliably beats
+buy-and-hold**:
+
+- Mean reversion on SPY/QQQ loses money overall after slippage on every
+  timeframe tested (15 minutes to 2 hours). Its short side lost in every test.
+- The momentum breakout on BTC wins about a quarter of its trades and loses
+  overall.
+- Stock momentum gained +80% over 2020–2026 on its six configured stocks.
+  On a 24-stock basket chosen without hindsight it gained only +6%, while SPY
+  buy-and-hold gained ~+135%. Its edge came mostly from stock selection.
+  Its genuine strength was drawdown control: −1% to −3% in 2022, when the
+  stocks fell 25–56%.
+
+This is the reason the project is paper-only.
+
 ## How it works
 
 Each instrument is mapped to a strategy entirely in [`config.py`](config.py),
