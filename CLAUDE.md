@@ -7,6 +7,12 @@ backtest, and what the backtests have shown so far.
 
 ## Working conventions
 
+- **This repo is public** (github.com/davyn1/trading-bot). Never commit
+  secrets, API keys, `.env`, account data (balances, positions, account IDs,
+  real trade logs, `state.json`), server addresses, or personal info (names,
+  emails, home paths, network details). Before every commit, check the staged
+  diff for these; keep real data files in gitignored or scratch locations.
+  Pushing changes public content, so ask before pushing.
 - Go **one step / one setting at a time**, explaining results in plain terms
   before moving on. Ask before multi-step changes.
 - **Paper trading only.** BTC/USD is kept for paper testing and is planned for
